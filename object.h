@@ -25,12 +25,13 @@ class Object
       void setXCenter(int x);
       void setYCenter(int y);
 
-      int HowManyObjects();
+      Scalar getAvgColour();
+      void setAvgColour(Scalar min, Scalar max);
 
    private:
       int corners;
       int xCenter, yCenter;
-      int HowMany;
-}
+      Scalar AvgColour;
+};
 
-#endif OBJECT_H
+#endif

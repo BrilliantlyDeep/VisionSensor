@@ -15,9 +15,12 @@
 #include <opencv/highgui.h>
 #include <opencv/cv.h>
 #include "myLib.h"
+#include "object.h"
 
 using namespace std;
 using namespace cv;
+
+#define TEST true
 
 HSV** InitialSetup(int N)
 {
@@ -71,6 +74,8 @@ HSV** InitialSetup(int N)
       
    }
 
+   capture.release();
+   destroyAllWindows();
    return bars;
 }
 
@@ -142,10 +147,18 @@ void DebugMode()
    return ;
 }
 
-
+//*********************************************************************************************************************
 void SensingMode(int HowManyColours)
 {
-   cv::Mat src, filter[HowManyColours];   // source image and filtered ones
+   cv::Mat src, srcHSV, filter[HowManyColours];   // source image and filtered ones
+   Mat edges[HowManyColours];
+
+   vector<Object> targets[HowManyColours];        // all the objects found are stored here
+                                                  // and divided by colour
+   
+   vector<vector<Point> > contours[HowManyColours];
+   vector<Vec4i> hierarchy[HowManyColours];
+
    // vector <Mat > filter;  <== this might be better
    VideoCapture capture;                  // VideoCapture object to get frames from camera
    
@@ -193,16 +206,71 @@ void SensingMode(int HowManyColours)
       return;
    }
 
-   for( int i = 0; i < HowManyColours; i++ )
+   while( (char)waitKey(30) != 'q' )
    {
+      capture.read(src);   // get the frame from camera
+
       // Detect everything we can in the i-th filtered image
+      for( int i = 0; i < HowManyColours; i++ )
+      {
+         // filtering -> blurring -> Canny edge detection -> Objects analysis
+         cvtColor(src, srcHSV, CV_BGR2HSV);     // convert such frame in the HSV colour space
+         inRange(srcHSV, Scalar( FiltersParams[0][i].hue, FiltersParams[0][i].sat, FiltersParams[0][i].val ),
+            Scalar( FiltersParams[1][i].hue, FiltersParams[1][i].sat, FiltersParams[1][i].val ), filter[i] );
+         morphOps( filter[i] );
+         // filter[i] now contains the binary that only displays the i-th colour.
+
+         // Apply Gaussian blurring and Canny edge algorithm for the edge detection
+         GaussianBlur(filter[i], filter[i], Size(3,3), 0, 0);   // Kernel = 3x3, Sigmas are calculated automatically
+                                                                // (see 'getGaussianKernel()')
+         Canny(filter[i], edges[i], 0, 100);
+
+         targets[i] = analyzeContours(filter[i]);
+      }
+
+      //===============================================================================================================
+      // used for testing
+      #if TEST == true
+      for(int i = 0; i < HowManyColours; i++)
+         for(int j = 0; j < targets[i].size(); j++)
+         {
+            DrawObecjtCenter(src, targets[i].at(j));
+         }
+
+      /* The "DrawObjectCenter" solution is better in terms of readability
+      // draw circles around objects centers and approximate them by means of rectangle
+      Mat drawing = Mat::zeros(src.size(), src.type());
+
+      // Note: I can have multiple objects of the same colour
+      for (int i = 0; i < HowManyColours; ++i)   // Check one colour at a time
+      {
+         for (int j = 0; j < targets[i].size(); ++j)   // check every object in the i-th colour
+         {
+            // draws blue circles around position of the identified objects
+            circle(drawing, Point( targets[i].at(j).getXCenter(), targets[i].at(j).getYCenter() ), 10, Scalar(255,0,0), 1, 8);
+         }
+      }
+
+      imshow("Centers", drawing);
+      */
       
+      imshow("Centers", src);
+      #endif
+
+      #if !TEST
+
+      #endif
+      //===============================================================================================================
    }
+
+   destroyAllWindows();
+   capture.release();
 
    return;
 }
+//*********************************************************************************************************************
 
-
+//*********************************************************************************************************************
 void createTrackbarsForHSVSel(HSV* min, HSV* max)
 {
    cv::namedWindow("Trackbars", CV_WINDOW_AUTOSIZE);
@@ -216,8 +284,9 @@ void createTrackbarsForHSVSel(HSV* min, HSV* max)
 
    return;
 }
+//*********************************************************************************************************************
 
-
+//*********************************************************************************************************************
 void findAndDrawRect(std::vector<std::vector<cv::Point> > contours, cv::Size drawingSize )
 {
    std::vector<cv::RotatedRect> minRect(contours.size());
@@ -240,7 +309,9 @@ void findAndDrawRect(std::vector<std::vector<cv::Point> > contours, cv::Size dra
 
    return;
 }
+//*********************************************************************************************************************
 
+//*********************************************************************************************************************
 void morphOps(Mat &thresh)
 {
    // create structuring element that will be used to "dilate" and "erode" image.
@@ -248,11 +319,89 @@ void morphOps(Mat &thresh)
    // As a rule of thumb you want to dilate with larger element to make sure the object is nicely visible
    // but I actually found that often time this is not the case.
 
-   erode (thresh,thresh,getStructuringElement( MORPH_RECT, Size(3,3)));
-   dilate(thresh,thresh,getStructuringElement( MORPH_RECT, Size(3,3)));
+   erode ( thresh,thresh,getStructuringElement( MORPH_RECT, Size(3,3)) );
+   dilate( thresh,thresh,getStructuringElement( MORPH_RECT, Size(3,3)) );
 
-   dilate(thresh,thresh,getStructuringElement( MORPH_RECT, Size(3,3)));
-   erode (thresh,thresh,getStructuringElement( MORPH_RECT, Size(3,3)));
+   dilate( thresh,thresh,getStructuringElement( MORPH_RECT, Size(3,3)) );
+   erode ( thresh,thresh,getStructuringElement( MORPH_RECT, Size(3,3)) );
 
    return ; 
+}
+//*********************************************************************************************************************
+
+//*********************************************************************************************************************
+// returns all the objects found in the image by analysing its contours.
+// image should be previously treated with the Canny function for better results.
+vector<Object> analyzeContours(Mat image)
+{
+   vector<vector<Point> > contours;
+   vector<Vec4i> hierarchy;
+   Moments moment;
+
+   Mat tempImage;
+
+   vector<Object> object;   // objects
+   Object tempObject;
+
+   double objectArea = 0;
+   bool OBJECT_FOUND = false;
+
+   image.copyTo(tempImage);
+
+   findContours( tempImage, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE, Point(0, 0) );
+   // As by definition for the CV_RETR_CCOMP flag:
+   // retrieves all of the contours and organizes them into a two-level hierarchy. At the top level, there are external
+   // boundaries of the components. At the second level, there are boundaries of the holes. If there is another contour
+   // inside a hole of a connected component, it is still put at the top level.
+
+   if (hierarchy.size() > 0)
+   {
+      int numObjects = hierarchy.size();
+      // if numObjects > MAX_NUM_OBJECTS we have a noisy filter
+      
+      // Code written by Kyle Hounslow and modified by Ahmad Kaifi & Hassan Althobaiti
+      if(numObjects < MAX_NUM_OBJECTS)
+      {
+         for(int index = 0; index >= 0; index = hierarchy[index][0])
+         {
+            moment = moments( (Mat)contours[index] );
+            objectArea = moment.m00;
+            //if the area is less than 20 px by 20px then it is probably just noise
+            //if the area is the same as the 3/2 of the image size, probably just a bad filter
+            //we only want the object with the largest area so we safe a reference area each
+            //iteration and compare it to the area in the next iteration.
+            if(objectArea > MIN_OBJECT_AREA)
+            {
+               // find the centroid of the image as by definition
+               // Centroid (x, y) = (m10/m00, m01/m00)
+               tempObject.setXCenter(moment.m10/objectArea);
+               tempObject.setYCenter(moment.m01/objectArea);
+
+               object.push_back(tempObject);
+
+               OBJECT_FOUND = true;
+            }
+            else
+               OBJECT_FOUND = false;
+         }
+      }
+      //////////////////////////////////////////////////////////////////////////////////
+      else
+      {/*
+         cout << "The image is too noisy. Adjust the filter." << endl;
+         cout << "Exiting" << endl;
+         return NULL;
+      */}
+         // previous code won't likely work since a "noise burst" would shutdown the sensor
+   }
+
+   return object;
+
+}
+//*********************************************************************************************************************
+
+void DrawObecjtCenter(Mat &image, Object object)
+{
+   circle(image, Point( object.getXCenter(), object.getYCenter() ), 10, Scalar(255,0,0), 1, 8);
+   return;
 }

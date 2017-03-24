@@ -26,6 +26,8 @@
    18th Mar 2017: when the function is called by terminal and no argument is passed, a segmentation
    fault error appears. Still trying to figure out why. FIXED (on 20th March).
    Still changes and adjustaments are needed.
+   24th Mar 2017: software works pretty well more or less. There's still room for improvement in the object.cpp file. 
+   A function that returns the averege colour of the pointed object should be implemented asap.
 
 */
 
@@ -52,7 +54,6 @@ int main(int argc, char* argv[])
    }
    if ( strcmp(argv[1], "-DEBUG") == 0 )
    {   
-      cout << "Why am I here?" << endl;
       DebugMode();   // argv[1] = -DEBUG => we enter debug mode
    }
 
